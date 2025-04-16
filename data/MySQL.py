@@ -14,11 +14,11 @@ class MySQL_CRUD:
     def __init__(self):
         DATABASE_TYPE = "mysql"
         DRIVER = "pymysql"
-        USERNAME = "root"
-        PASSWORD = "123456"
-        HOST = "20.168.12.154"
+        USERNAME = "henry"
+        PASSWORD = "password"
+        HOST = "localhost"
         PORT = 3306
-        DATABASE_NAME = "telco_db"
+        DATABASE_NAME = "liver_medical"
         engine_url = f"{DATABASE_TYPE}+{DRIVER}://{USERNAME}:{PASSWORD}@{HOST}:{PORT}/{DATABASE_NAME}"
         self.engine = sqlalchemy.create_engine(engine_url)
     def insert_df_to_sql(self,df,table_name):
@@ -35,7 +35,7 @@ if __name__ == '__main__':
     #     host='localhost',  # 数据库地址
     #     user='root',  # 数据库用户名
     #     passwd=123456,  # 数据库密码
-    #     db='telco_db',  # 数据库名
+    #     db='liver_medical',  # 数据库名
     #     charset='utf8'  # 字符集选择utf8
     # )
     # cursor = connection.cursor()
