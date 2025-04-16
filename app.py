@@ -45,12 +45,12 @@ with open('datafile/liver_medical_data_dictionary.md', 'r', encoding='utf-8') as
 
 functions=[ { "type": "function", "function": item} for item in  tools_content]
 
-p1 = InterProject(project_name='demo', folder_id='D:\sandbox\AI-MDA\data',  part_name='json',upload_to_google_drive = False)
+p1 = InterProject(project_name='demo', folder_id='data',  part_name='json',upload_to_google_drive = False)
 print(p1.folder_id)
 
 with open('datafile/DA2 instruct.md', 'r', encoding='utf-8') as f: #數據分析報告格式
     report_content = f.read()
-report = InterProject(project_name='demo', folder_id='D:\sandbox\AI-MDA\data',  part_name='analysis',upload_to_google_drive = False)
+report = InterProject(project_name='demo', folder_id='data',  part_name='analysis',upload_to_google_drive = False)
 
 mategen_test = MateGen(api_key = api_key,      # 设置api_key
                     system_content_list=[md_content , "你是一名资深数据分析师，可以使用各种给定的工具，挖掘数字规律并进行深度分析",],

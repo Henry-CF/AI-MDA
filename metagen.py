@@ -273,6 +273,8 @@ class InterProject():
         if folder_id == None:
             folder_id = create_or_get_folder(folder_name=project_name,
                                              upload_to_google_drive = upload_to_google_drive)
+        else:
+            folder_id = os.path.join(os.getcwd(), folder_id)
         self.folder_id = folder_id
         
         # 創建或獲取文件ID其他文件名稱列表
@@ -1091,8 +1093,12 @@ def check_get_final_function_response(model,
                                       delete_some_messages=False):
     
     if not success:
-        print(function_response_message["content"])
-        debug_prompt_list = ['你编写的代码报错了，请根据错误信息修改代码并重新运行。']
+        res_content = function_response_message["content"]
+        print(res_content)
+        denied = 'denied' in res_content or 'Denied' in res_content
+        if denied:
+            depth = 4
+        debug_prompt_list = ['访问本地库出错，权限失败' if denied else '你编写的代码报错了，请根据错误信息修改代码并重新运行。']
 
         print_msgs(messages, "before debug")
         # 此時msg最後一條消息是user message，而不是任何函数调用相關message
@@ -1124,9 +1130,9 @@ def check_get_final_function_response(model,
         func_content = function_response_message['content']
         function_response_message['content'] = "tool执行成功，结果为'%s'。" % func_content
         messages.messages_append(function_response_message)
-        user_content = "请核实原始问题(%s)是否完全解决，如未完成，请继续做答。你可以继续按需要使用我提供的tools。" % origin_question
+        # user_content = "请核实原始问题(%s)是否完全解决，如未完成，请继续做答。你可以继续按需要使用我提供的tools。" % origin_question
         
-        messages.messages_append({"role": "user", "content": user_content})
+        # messages.messages_append({"role": "user", "content": user_content})
         messages = get_chat_response(model=model, 
                                      origin_question=origin_question,
                                      messages=messages, 
