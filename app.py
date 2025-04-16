@@ -9,11 +9,15 @@ import os
 # 读取 config.ini 文件
 config = configparser.ConfigParser()
 config.read('config.ini')
-azure_endpoint = config['AzureOpenAI']['azure_endpoint']
-api_key = config['AzureOpenAI']['api_key']
-api_version = config['AzureOpenAI']['api_version']
 
-print("azure_endpoint : " + azure_endpoint)
+platform_str='BaiLian'
+model_str = 'qwen-plus' # 'deepseek-r1'
+endpoint = config[platform_str + 'OpenAI']['endpoint']
+api_key = config[platform_str + 'OpenAI']['api_key']
+# api_version = config['AzureOpenAI']['api_version']
+
+
+print("endpoint : " + endpoint)
 
 # Flask 設定
 app = Flask(__name__)
@@ -21,10 +25,12 @@ CORS(app)
 
 ###################AzureOpenAI#######################################
 from openai import AzureOpenAI
-client = AzureOpenAI(
-        azure_endpoint=azure_endpoint,
+from openai import OpenAI
+
+client = OpenAI(
+        base_url=endpoint,
         api_key=api_key ,
-        api_version=api_version,
+        # api_version=api_version,
     )
 
 #####################################################################
@@ -33,31 +39,32 @@ from metagen import *
 import pandas as pd
 from tools import tools_content
 from custom_prompt import *
-from ppt_write import *
+# from ppt_write import *
 with open('datafile/liver_medical_data_dictionary.md', 'r', encoding='utf-8') as f:
     md_content = f.read()  
-with open('datafile/DA2 instruct.md', 'r', encoding='utf-8') as f: #數據分析報告格式
-    report_content = f.read()
 
-functions=tools_content
+functions=[ { "type": "function", "function": item} for item in  tools_content]
 
-p1 = InterProject(project_name='測試項目', part_name='json文檔',upload_to_google_drive =True)
-report = InterProject(project_name='測試項目', part_name='分析報告文檔',upload_to_google_drive =True)
+p1 = InterProject(project_name='demo', folder_id='D:\sandbox\AI-MDA\data',  part_name='json',upload_to_google_drive = False)
 print(p1.folder_id)
 
+with open('datafile/DA2 instruct.md', 'r', encoding='utf-8') as f: #數據分析報告格式
+    report_content = f.read()
+report = InterProject(project_name='demo', folder_id='D:\sandbox\AI-MDA\data',  part_name='analysis',upload_to_google_drive = False)
+
 mategen_test = MateGen(api_key = api_key,      # 设置api_key
-                    system_content_list=[md_content,report_content],
-                    model ="4o_nita_20240702",           # 设置模型
+                    system_content_list=[md_content , "你是一名资深数据分析师，可以使用各种给定的工具，挖掘数字规律并进行深度分析",],
+                    model =model_str,           # 设置模型
                     available_functions=AvailableFunctions(functions_list=[sql_inter,extract_data,python_inter,fig_inter],functions=functions, function_call="auto")
                     ,project=p1,
-                    #is_enhanced_mode=True
+                    is_enhanced_mode=True
                     )
 
-mategen_report = MateGen(api_key = api_key,      # 设置api_key
-                    system_content_list=[md_content,report_content],
-                    model ="4o_nita_20240702",           # 设置模型
-                    available_functions=AvailableFunctions(functions_list=[sql_inter,extract_data,python_inter,fig_inter],functions=functions, function_call="auto")
-                    ,project=report)
+# mategen_report = MateGen(api_key = api_key,      # 设置api_key
+#                     system_content_list=[md_content,report_content],
+#                     model =model_str,           # 设置模型
+#                     available_functions=AvailableFunctions(functions_list=[sql_inter,extract_data,python_inter,fig_inter],functions=functions, function_call="auto")
+#                     ,project=report)
 
 def append_doc_googledrive(folder_id=report.folder_id, doc_id=report.doc_id, dict_string=""):
     rep=''
@@ -91,8 +98,16 @@ def index():
 
 @app.route('/upload', methods=['GET', 'POST'])
 def upload_file():
-    file = request.files['filename']
-    if file :  
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part in the request"}), 400
+    
+    file = request.files['file']
+    
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    
+    if file:
+        # 简单处理，例如保存文件
         os.makedirs('./data' ,exist_ok=True)
         file.save(os.path.join('./data', file.filename))
         print('更新')
@@ -168,23 +183,29 @@ def send_message():
     data = request.json
     user_message = data.get('userMessage')
 
+    keywords = ['知识库', '本地', '资料库', 'telco']
+
     # 如果不在知識庫中   如果在知識庫
     try:
-        if '回診比例' in user_message:
+        if '新对话' in user_message:
+            mategen_test.reset() 
+
+        if any(keyword in user_message for keyword in keywords):
             mategen_test.chat(question=user_message)
             #mategen_test.upload_messages()
-            print(mategen_test.messages.history_messages[-1]['content'])
+            response_text = mategen_test.messages.history_messages[-1]['content']
             #append_doc_googledrive(folder_id=report.folder_id, doc_id=report.doc_id, dict_string=mategen_test.messages.history_messages)
-        print(numeric_prompt)
-        completion = client.chat.completions.create(
-            model="4o_nita_20240702",  
-            messages=[{"role": "system", "content": precise_prompt.format(mategen_test.messages.history_messages[-1]['content']+';'+numeric_prompt)}
+        else:
+            print("numeric_prompt", numeric_prompt)
+            completion = client.chat.completions.create(
+                model=model_str,  
+                messages=[{"role": "system", "content": precise_prompt.format(mategen_test.messages.history_messages[-1]['content']+';'+numeric_prompt)}
                       ,{"role": "user", "content":user_message}
                     ],
-            temperature=0.2,
-            top_p=0.90,
-        )
-        response_text = completion.choices[0].message.content
+                temperature=0.2,
+                top_p=0.90,
+            )
+            response_text = completion.choices[0].message.content
         return jsonify({"response": str(response_text)})
     except requests.exceptions.RequestException as e:
         print(f"Connection error: {e}")
@@ -241,14 +262,14 @@ def speech_to_text():
 
     
     completion = client.chat.completions.create(
-        model="4o_nita_20240702",  
+        model=model_str,  
         messages=[{"role": "system", "content": precise_prompt.format(numeric_prompt)},
                   {"role": "user", "content": user_text}],
         temperature=0.2,
         top_p=0.90,
     )
     response_text = completion.choices[0].message.content
-    print(response_text)
+    print("response_text is", response_text)
     
     # 生成語音回覆前刪除先前的回覆音頻文件
     audio_response_path = os.path.join('recording', 'response.wav')
@@ -275,6 +296,10 @@ def get_audio_file(filename):
     return send_from_directory('recording', filename)
 
 
+@app.route('/data/<filename>', methods=['GET'])
+def get_data_file(filename):
+    return send_from_directory('data', filename)
+
 
 @app.route('/report_download', methods=['POST'])
 def report_download():
@@ -286,7 +311,7 @@ def report_download():
     ]
 
     completion = client.chat.completions.create(
-        model="4o_nita_20240702",  
+        model=model_str,  
         messages=message_text,
         temperature=0.2,
         top_p=0.90,

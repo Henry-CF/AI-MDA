@@ -26,19 +26,23 @@ from email.parser import BytesParser
 from email.mime.text import MIMEText
 os.environ['SSL_VERSION'] = 'TLSv1_2'
 
-from openai import AzureOpenAI
+os.environ['HTTPS_PROXY'] = 'http://127.0.0.1:3080'
+os.environ['HTTP_PROXY'] = 'http://127.0.0.1:3080'
+
+from openai import OpenAI
 
 import configparser
 config = configparser.ConfigParser()
 config.read('config.ini')
-azure_endpoint = config['AzureOpenAI']['azure_endpoint']
-api_key = config['AzureOpenAI']['api_key']
-api_version = config['AzureOpenAI']['api_version']
+platform_str='BaiLian'
+endpoint = config[platform_str + 'OpenAI']['endpoint']
+api_key = config[platform_str + 'OpenAI']['api_key']
+# api_version = config[platform_str + 'OpenAI']['api_version']
 
-client = AzureOpenAI(
-  azure_endpoint = azure_endpoint, 
+client = OpenAI(
+  base_url = endpoint, 
   api_key=api_key,
-  api_version=api_version,
+  # api_version=api_version,
 )
 
 def create_or_get_folder(folder_name, upload_to_google_drive=False):
@@ -333,7 +337,7 @@ class InterProject():
 class ChatMessages():
     def __init__(self, 
                  system_content_list=[], 
-                 question='請先介紹telco_db數據庫裡的數據表',
+                 question= None,
                  tokens_thr=None, 
                  project=None):
 
@@ -383,10 +387,10 @@ class ChatMessages():
             all_tokens_count += system_tokens_count
         
         # 創建首次對话消息
-        history_messages = [{"role": "user", "content": question}]
+        history_messages = [ {"role": "user", "content": question}] if question else []
         # 創建全部消息列表
         messages_all += history_messages
-        user_tokens_count = len(encoding.encode(question))
+        user_tokens_count = len(encoding.encode(question)) if question else 0
         
         # 計算總token數
         all_tokens_count += user_tokens_count
@@ -416,16 +420,17 @@ class ChatMessages():
      
     def messages_pop(self, manual=False, index=None):
         def reduce_tokens(index):
-            drop_message = self.history_messages.pop(index)
-            self.tokens_count -= len(self.encoding.encode(str(drop_message)))
+            drop_message =  str(self.history_messages.pop(index))
+            print(">>>>>>>> drop older message:", index,  drop_message)
+            self.tokens_count -= len(self.encoding.encode(drop_message))
 
         if self.tokens_thr is not None:
             while self.tokens_count >= self.tokens_thr:
-                reduce_tokens(-1)
+                reduce_tokens(0)
 
         if manual:
             if index is None:
-                reduce_tokens(-1)
+                reduce_tokens(0)
             elif 0 <= index < len(self.history_messages) or index == -1:
                 reduce_tokens(index)
             else:
@@ -448,13 +453,27 @@ class ChatMessages():
             self.messages.append({'role': new_messages.role, 'content': new_messages.content})
             self.tokens_count += len(self.encoding.encode(str(new_messages)))
 
-
-
-        print(self.history_messages)    
         # 重新更新history_messages
         self.history_messages = self.messages[self.num_of_system_messages: ]
         # 再執行pop，若有需要，則會删除部分歷史消息
         self.messages_pop()
+
+    def messages_insert(self, new_messages, index=None, skip_pop = False):
+        if (index is None):
+            self.messages_append(self, new_messages)
+        else:
+            if type(new_messages) is dict:
+                self.messages.insert(index, new_messages)
+                self.tokens_count += len(self.encoding.encode(str(new_messages)))
+            elif type(new_messages.content) is str:
+                self.messages.insert(index, {'role': new_messages.role, 'content': new_messages.content})
+                self.tokens_count += len(self.encoding.encode(str(new_messages)))
+
+            # 重新更新history_messages
+            self.history_messages = self.messages[self.num_of_system_messages: ]
+            # 再執行pop，若有需要，則會删除部分歷史消息
+            if (not skip_pop):
+                self.messages_pop()
       
     def copy(self):
         system_content_str_list = [message['content'] for message in self.system_messages]
@@ -524,7 +543,7 @@ def sql_inter(sql_query, g='globals()'):
     用於執行一段SQL代碼，並最終獲取SQL代碼執行結果，\
     核心功能是將輸入的SQL代碼傳輸至MySQL環境中進行運行，\
     並最終返回SQL代碼運行結果。需要注意的是，本函數是藉助pymysql來連接MySQL數據庫。
-    :param sql_query: 字元串形式的SQL查詢語句，用於執行對MySQL中telco_db數據庫中各張表進行查詢，並獲得各表中的各類相關信息
+    :param sql_query: 字元串形式的SQL查詢語句，用於執行對MySQL中liver_medical數據庫中各張表進行查詢，並獲得各表中的各類相關信息
     :param g: g，字元串形式變量，表示環境變量，無需設定，保持默認參數即可
     :return：sql_query在MySQL中的運行結果。
     """
@@ -540,6 +559,7 @@ def sql_inter(sql_query, g='globals()'):
         with connection.cursor() as cursor:
             # SQL查詢語句
             sql = sql_query
+            print("sql:",sql)
             cursor.execute(sql)
 
             # 獲取查詢結果
@@ -575,7 +595,7 @@ def extract_data(sql_query,df_name,g='globals()'):
 def python_inter(py_code, g='globals()'):
     """
     專門用於執行非繪圖類python代碼，並獲取最終查詢或處理結果。若是設計繪圖操作的Python代碼，則需要調用fig_inter函數來執行。
-    :param py_code: 字元串形式的Python代碼，用於執行對telco_db數據庫中各張數據表進行操作
+    :param py_code: 字元串形式的Python代碼，用於執行對liver_medical數據庫中各張數據表進行操作
     :param g: g，字元串形式變量，表示環境變量，無需設定，保持默認參數即可
     :return：代碼運行的最終結果
     """    
@@ -605,30 +625,64 @@ def python_inter(py_code, g='globals()'):
                 pass
             # 若不是重復賦值，則報錯
             return f"代碼執行時報錯{e}"
-        
-p1 = InterProject(project_name='測試項目', part_name='json文檔',upload_to_google_drive =True)        
+
+def save_to_local_file(figure, folder_path='images'):
+    """
+    Save the figure to a local file in the specified folder.
+    
+    Parameters:
+    - figure: A Matplotlib figure object.
+    - folder_path: Path to the folder where the image will be saved. Default is 'images'.
+    
+    Returns:
+    - The relative path to the saved image file.
+    """
+    
+    # Ensure the folder exists
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+    
+    # Save the figure to a file
+    filename = os.path.join(folder_path, 'figure.png')
+    figure.savefig(filename)
+    
+    # Get the relative path
+    relative_path = os.path.relpath(filename)
+    
+    print(f"Image saved to local file: {filename}")
+    return relative_path
+
+p1 = InterProject(project_name='demo', folder_id="data", part_name='json',upload_to_google_drive =False)        
 def upload_image_to_drive(figure, folder_id = p1.folder_id):
-    folder_id = folder_id 
-    creds = Credentials.from_authorized_user_file('token.json')
-    drive_service = build('drive', 'v3', credentials=creds)
-    
-    # 1. Save image to Google Drive
-    buf = BytesIO()
-    figure.savefig(buf, format='png')
-    buf.seek(0)
-    media = MediaIoBaseUpload(buf, mimetype='image/png', resumable=True)
-    file_metadata = {
-        'name': 'ImageName.png',
-        'parents': [folder_id],
-        'mimeType': 'image/png'
-    }
-    image_file = drive_service.files().create(
-        body=file_metadata,
-        media_body=media,
-        fields='id,webContentLink'  # Specify the fields to be returned
-    ).execute()
-    
-    return image_file["webContentLink"]
+    if p1.upload_to_google_drive:
+        folder_id = folder_id 
+        creds = Credentials.from_authorized_user_file('token.json')
+        drive_service = build('drive', 'v3', credentials=creds)
+        
+        # 1. Save image to Google Drive
+        buf = BytesIO()
+        figure.savefig(buf, format='png')
+        buf.seek(0)
+        media = MediaIoBaseUpload(buf, mimetype='image/png', resumable=True)
+        file_metadata = {
+            'name': 'ImageName.png',
+            'parents': [folder_id],
+            'mimeType': 'image/png'
+        }
+        image_file = drive_service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id,webContentLink'  # Specify the fields to be returned
+        ).execute()
+        return image_file["webContentLink"]
+    else:
+        filename = os.path.join(p1.folder_id, 'figure.png')
+        figure.savefig(filename)
+        # Get the relative path
+        relative_path =  os.path.relpath(filename)
+        
+        print(f"Image saved to local file: {filename}")
+        return relative_path
 
 def fig_inter(py_code, fname, g='globals()'):
     """
@@ -663,6 +717,8 @@ def fig_inter(py_code, fname, g='globals()'):
     # 上传图片
     try:
         fig_url = upload_image_to_drive(fig)
+        if not 'http' in fig_url:
+            fig_url = 'http://localhost:5000/%s' % fig_url
         res = f"已经成功运行代码，并已将代码创建的图片存储至：{fig_url}"
         
     except Exception as e:
@@ -696,62 +752,47 @@ class AvailableFunctions():
         if function_call_update != None:
             self.function_call = function_call_update
             
-def add_task_decomposition_prompt(messages):
-    # 第一個提示示例
-    user_question1 = '請問谷歌雲郵箱是什麼？'
-    user_message1_content = "現有用戶問題如下：“%s”。為了回答這個問題，總共需要分幾步來執行呢？\
-    若無需拆分執行步驟，請直接回答原始問題。" % user_question1
-    assistant_message1_content = '谷歌雲郵箱是指Google Workspace（原G Suite）中的Gmail服務，\
-    它是一個安全、智能、易用的電子郵箱，有15GB的免費存儲空間，可以直接在電子郵件中接收和存儲郵件。\
-    Gmail 郵箱會自動過濾垃圾郵件和病毒郵件，並且可以通過電腦或手機等移動設備在任何地方查閱郵件。\
-    您可以使用搜索和標簽功能來組織郵件，使郵件處理更為高效。'
+def add_task_decomposition_prompt(messages, depth=1):
 
-    # 第二個提示示例
-    user_question2 = '請幫我介紹下OpenAI。'
-    user_message2_content = "現有用戶問題如下：“%s”。為了回答這個問題，總共需要分幾步來執行呢？\
-    若無需拆分執行步驟，請直接回答原始問題。" % user_question2
-    assistant_message2_content = 'OpenAI是一家開發和應用友好人工智慧的公司，\
-    它的目標是確保人工通用智能（AGI）對所有人都有益，以及隨著AGI部署，盡可能多的人都能受益。\
-    OpenAI致力在商業利益和人類福祉之間做出正確的平衡，本質上是一家人道主義公司。\
-    OpenAI開發了諸如GPT-3這樣的先進模型，在自然語言處理等諸多領域表現出色。'
+    user_question = messages.history_messages[-1]["content"]
+    new_question = "问题是：“%s”。为了回答这个问题，你可以使用我提供的tools 列表。\
+    若无需拆分执行步骤，请直接回答原问题。" % user_question
 
-    # 第三個提示示例
-    user_question3 = '圍繞數據庫中的user_payments表，我想要檢查該表是否存在缺失值'
-    user_message3_content = "現有用戶問題如下：“%s”。為了回答這個問題，總共需要分幾步來執行呢？\
-    若無需拆分執行步驟，請直接回答原始問題。" % user_question3
-    assistant_message3_content = '為了檢查user_payments數據集是否存在缺失值，我們將執行如下步驟：\
-    \n\n步驟1：使用`extract_data`函數將user_payments數據表讀取到當前的Python環境中。\
-    \n\n步驟2：使用`python_inter`函數執行Python代碼檢查數據集的缺失值。'
+    # 第2个提示示例
+    user_question3 = '围绕数据库中的C肝帶原表，我想要检查该表是否存在缺失值'
+    user_message3_content = "问题是：“%s”。为了回答这个问题，你可以使用我提供的tools 列表。\
+    若无需拆分执行步骤，请直接回答原问题。" % user_question3
+    assistant_message3_content = '我将执行如下步骤：\
+    \n\n步骤1：使用`extract_data`函数将C肝帶原数据表读取到当前的Python环境中。\
+    \n\n步骤2：使用`python_inter`函数执行Python代码检查数据集的缺失值。'
 
-    # 第四個提示示例
-    user_question4 =  '我想尋找合適的缺失值填補方法，來填補user_payments數據集中的缺失值。'
-    user_message4_content = "現有用戶問題如下：“%s”。為了回答這個問題，總共需要分幾步來執行呢？\
-    若無需拆分執行步驟，請直接回答原始問題。" % user_question4
-    assistant_message4_content = '為了找到合適的缺失值填充方法，我們需要執行以下三步：\
-    \n\n步驟1：分析user_payments數據集中的缺失值情況。通過查看各欄位的缺失率和觀察缺失值分佈，瞭解其缺失幅度和模式。\
-    \n\n步驟2：確定值填補策略。基於觀察結果和特定欄位的性質確定恰當的填補策略，例如使用眾數、中位數、均值或建立模型進行填補等。\
-    \n\n步驟3：進行缺失值填補。根據確定的填補策略，執行填補操作，然後驗證填補效果。'
+    # 第3个提示示例
+    # user_question4 = '我想寻找合适的缺失值填补方法，来填补user_payments数据集中的缺失值。'
+    # user_message4_content = "问题是：“%s”。为了回答这个问题，你可以使用我提供的tools 列表。\
+    # 若无需拆分执行步骤，请直接回答原问题。" % user_question4
+    # assistant_message4_content = '为了找到合适的缺失值填充方法，我们需要执行以下三步：\
+    # \n\n步骤1：分析user_payments数据集中的缺失值情况。通过查看各字段的缺失率和观察缺失值分布，了解其缺失幅度和模式。\
+    # \n\n步骤2：确定值填补策略。基于观察结果和特定字段的性质确定恰当的填补策略，例如使用众数、中位数、均值或建立模型进行填补等。\
+    # \n\n步骤3：进行缺失值填补。根据确定的填补策略，执行填补操作，然后验证填补效果。'
+
+
+    print("add_task_decomposition_prompt", messages.history_messages[-1]['content'], messages.messages[-1]['content'] )
+    
+    question_message = messages.history_messages[-1].copy()
     
     # 在保留原始問題的情況下加入Few-shot
     task_decomp_few_shot = messages.copy()
     task_decomp_few_shot.messages_pop(manual=True, index=-1)
-    task_decomp_few_shot.messages_append({"role": "user", "content": user_message1_content})
-    task_decomp_few_shot.messages_append({"role": "assistant", "content": assistant_message1_content})
-    task_decomp_few_shot.messages_append({"role": "user", "content": user_message2_content})
-    task_decomp_few_shot.messages_append({"role": "assistant", "content": assistant_message2_content})
+    # task_decomp_few_shot.messages_append({"role": "user", "content": user_message2_content})
+    # task_decomp_few_shot.messages_append({"role": "assistant", "content": assistant_message2_content})
     task_decomp_few_shot.messages_append({"role": "user", "content": user_message3_content})
     task_decomp_few_shot.messages_append({"role": "assistant", "content": assistant_message3_content})
-    task_decomp_few_shot.messages_append({"role": "user", "content": user_message4_content})
-    task_decomp_few_shot.messages_append({"role": "assistant", "content": assistant_message4_content})
+    #task_decomp_few_shot.messages_append({"role": "user", "content": user_message4_content})
+    #task_decomp_few_shot.messages_append({"role": "assistant", "content": assistant_message4_content})
+    task_decomp_few_shot.messages_append({"role": question_message["role"], "content": new_question })
     
-    user_question = messages.history_messages[-1]["content"]
-
-    new_question = "現有用戶問題如下：“%s”。為了回答這個問題，總共需要分幾步來執行呢？\
-    若無需拆分執行步驟，請直接回答原始問題。" % user_question
-    question_message = messages.history_messages[-1].copy()
-    question_message["content"] = new_question
-    task_decomp_few_shot.messages_append(question_message)
-    
+    print("======== leave add_task_decomposition_prompt=======")
+    print_msgs(task_decomp_few_shot,depth)
     return task_decomp_few_shot
 
 
@@ -764,14 +805,16 @@ def function_to_call(available_functions, function_call_message):
     """
     
     # 獲取調用外部函數的函數名稱
-    function_name = function_call_message.function_call.name
+    function_name = function_call_message.function.name
     
     # 根據函數名稱獲取對應的外部函數對象
     fuction_to_call = available_functions.functions_dic[function_name]
     
     # 提取function_call_message中調用外部函數的函數參數
     # 即大模型編寫的SQL或者Python代碼
-    function_args = json.loads(function_call_message.function_call.arguments)
+    function_args = json.loads(function_call_message.function.arguments)
+
+    success = True
     
     # 將參數帶入到外部函數中並運行
     try:
@@ -784,32 +827,40 @@ def function_to_call(available_functions, function_call_message):
     # 若外部函數運行報錯，則提取報錯信息
     except Exception as e:
         function_response = "函數運行報錯如下:" + str(e)
+        success = False
         #print(function_response)
         
     # 創建function_response_messages
     # 該message包含外部函數順利運行或報錯信息
     
     function_response_messages = {
-        "role": "function",
+        "role": "tool",
         "name": function_name,
         "content": function_response,
+        "tool_id": function_call_message.id
     }
     
-    return function_response_messages
+    return success, function_response_messages
 
-
+def print_msgs(messages, prefix=None):
+    print("====history messages", prefix if prefix else "")
+    messages = messages.history_messages if isinstance(messages, ChatMessages) else messages
+    for msg in messages:
+        print("  msg", msg)
 
 
 def get_gpt_response(model, 
                      messages, 
                      available_functions=None,
+                     depth=1,
                      is_enhanced_mode=False):
-        
+    print("get_gpt_response, depth=", depth)
     if is_enhanced_mode:
-        messages = add_task_decomposition_prompt(messages)
+        messages = add_task_decomposition_prompt(messages, depth)
 
     # 考慮到可能存在通信报错问题，因此循環調用Chat模型進行执行
     while True:
+        print_msgs(messages, depth)
         try:
             # 若不存在外部函数
             if available_functions == None:
@@ -822,8 +873,8 @@ def get_gpt_response(model,
                 response = client.chat.completions.create(
                     model=model,
                     messages=messages.messages, 
-                    functions=available_functions.functions, 
-                    function_call=available_functions.function_call
+                    tools=available_functions.functions, 
+                    # function_call=available_functions.function_call
                     )   
             break  # 如果成功获取响应，退出循环
             
@@ -840,24 +891,26 @@ def get_gpt_response(model,
                 請編寫一段話，來引導用戶重新提問。" % question
                 try:
                     msg_temp.messages[-1]["content"] = new_prompt
+                    print_msgs(msg_temp, depth)
                     # 修改用戶问题並直接提问
                     response = client.chat.completions.create(
                         model=model,
                         messages=msg_temp.messages)
                     
                     # 打印gpt返回的提示修改原问题的描述语句
-                    print(response.choices[0].message.content)
+                    print("response", response.choices[0].message.content)
                     user_input = input("請重新輸入問題，输入“退出”可以退出當前對話")
                     if user_input == "退出":
                         print("當前模型無法返回結果，已經退出")
                         return None
                     else:
-                        # 修改原始问题
+                        # 修改原问题
                         messages.history_messages[-1]["content"] = user_input
                         
                         # 再次進行提问
                         response_message = get_gpt_response(model=model, 
                                                             messages=messages, 
+                                                            depth=depth+1,
                                                             available_functions=available_functions,
                                                             is_enhanced_mode=is_enhanced_mode)
                         
@@ -874,38 +927,43 @@ def get_gpt_response(model,
                 print("由於Limit Rate限制，即將等待1分鐘後繼續運行...")
                 time.sleep(60)  # 等待1分钟
                 print("已等待60秒，即將開始重新調用模型並進行回答..")
-        
+    print("response first choice,depth=", depth, response.choices[0])
     return response.choices[0].message
 
 #任務拆解和深度debug(auto_gpt)
 def get_chat_response(model, 
+                      origin_question,
                       messages, 
                       available_functions=None,
                       is_enhanced_mode=False, 
+                      depth=1,
                       delete_some_messages=False, 
                       is_task_decomposition=False):
-    
-    
-
+    if (depth == 1):
+        print ("get_chat_response, top with functions:",  available_functions.functions)
+    else:
+        print("re-ener get_chat_response, depth=", depth)
     # is_task_decomposition=True时，不再重新創建response_message
     if not is_task_decomposition:
         # 先獲取單次大模型調用结果
         response_message = get_gpt_response(model=model, 
                                             messages=messages, 
+                                            depth = depth,
                                             available_functions=available_functions,
                                             is_enhanced_mode=is_enhanced_mode)
     
-    if is_task_decomposition or (is_enhanced_mode and response_message.function_call):
+    if is_task_decomposition or (is_enhanced_mode and (response_message.function_call or response_message.tool_calls)):
         is_task_decomposition = True
         # 在拆解任务时，将增加了任务拆解的few-shot-message命名为text_response_messages
-        task_decomp_few_shot = add_task_decomposition_prompt(messages)
+        task_decomp_few_shot = add_task_decomposition_prompt(messages,depth)
         # 同时更新response_message，此时response_message就是任务拆解之后的response
         response_message = get_gpt_response(model=model, 
                                             messages=task_decomp_few_shot, 
+                                            depth=depth,
                                             available_functions=available_functions,
-                                            is_enhanced_mode=is_enhanced_mode)
+                                            is_enhanced_mode=False)
         # 若拆分任务的提示无效，此时response_message有可能会再次创建一个function call message
-        if response_message.function_call:
+        if response_message.function_call or response_message.tool_calls:
             print("當前任務無需拆解，可以直接運行。")
 
     # 若本次调用是由修改对话需求产生，则按照参数设置删除原始message中的消息
@@ -917,55 +975,64 @@ def get_chat_response(model,
     # 此時，一定會有一個response_message
     # 接下来分response_message不同類型，執行不同流程
     # 若是文本响應类任务（包括普通文本响应和和复杂任务拆解审查两种情况，都可以使用相同代码）
-    if not response_message.function_call:
+    if (not response_message.function_call and not response_message.tool_calls) or depth > 4:
         # 将message保存为text_answer_message
         text_answer_message = response_message 
         messages = is_text_response_valid(model=model, 
-                                          messages=messages, 
-                                          text_answer_message=text_answer_message,
-                                          available_functions=available_functions,
-                                          is_enhanced_mode=is_enhanced_mode, 
-                                          delete_some_messages=delete_some_messages,
-                                          is_task_decomposition=is_task_decomposition)
+                                        messages=messages, 
+                                        depth=depth,
+                                        text_answer_message=text_answer_message,
+                                        available_functions=available_functions,
+                                        is_enhanced_mode=is_enhanced_mode, 
+                                        delete_some_messages=delete_some_messages,
+                                        is_task_decomposition=is_task_decomposition)
     
     
     
     # 若是function response任務
-    elif response_message.function_call:
+    else:
         # 創建调用外部函数的function_call_message
-        # 在Agent中，function_call_message是一个包含SQL代码或者Python代码的JSON对象
-        function_call_message = response_message 
+
+        function_call_message = response_message if response_message.function_call else response_message.tool_calls[0]
+
         # 将function_call_message带入代码审查和运行函数is_code_response_valid
         # 并最终获得外部函数运行之后的问答结果
         messages = is_code_response_valid(model=model, 
-                                          messages=messages, 
-                                          function_call_message=function_call_message,
-                                          available_functions=available_functions,
-                                          is_enhanced_mode=is_enhanced_mode, 
-                                          delete_some_messages=delete_some_messages)
-    
+                                        origin_question=origin_question,
+                                        messages=messages, 
+                                        function_call_message=function_call_message,
+                                        available_functions=available_functions,
+                                        depth=depth,
+                                        is_enhanced_mode=is_enhanced_mode, 
+                                        delete_some_messages=delete_some_messages)
+            
+    print_msgs(messages.history_messages[-3:], "leave get_chat_response(depth=%s)" % depth)
     return messages    
 
-
+# 执行生成的code(内涵调试模式)
 def is_code_response_valid(model, 
+                           origin_question,
                            messages, 
                            function_call_message,
+                           depth=1,                           
                            available_functions=None,
                            is_enhanced_mode=False, 
                            delete_some_messages=False):
     
     # 字符串類型json格式的message對象
-    code_json_str = function_call_message.function_call.arguments
+    code_json_str = function_call_message.function.arguments
     # 將json轉化為字典
     try:
         code_dict = json.loads(code_json_str)
     except Exception as e:
         print("json字符解析錯誤，正在重新創建代碼...")
-        # 遞歸调用上層函数get_chat_response，並返回最終message結果
+        # 递归调用上層函数get_chat_response，並返回最終message結果
         # 需要注意的是，如果上層函数再次創建了function_call_message
         # 則會再次調用is_code_response_valid，而無需在當前函数中再次执行
         messages = get_chat_response(model=model, 
+                                     origin_question=origin_question,
                                      messages=messages, 
+                                     depth=depth+1,
                                      available_functions=available_functions,
                                      is_enhanced_mode=is_enhanced_mode, 
                                      delete_some_messages=delete_some_messages)
@@ -976,6 +1043,9 @@ def is_code_response_valid(model,
     # 創建convert_to_markdown内部函數，用於輔助打印代碼结果
     def convert_to_markdown(code, language):
         return f"```{language}\n{code}\n```"
+
+    # 在Agent中，function_call_message是一个包含SQL代码或者Python代码的JSON对象
+    messages.messages_append({"content": "", "tool_calls": [function_call_message], "role": "assistant"})
 
     # 提取代碼部分參數
     # 如果是SQL，則按照Markdown中SQL格式打印代碼
@@ -995,45 +1065,39 @@ def is_code_response_valid(model,
         
     print(markdown_code)
         
-    function_response_message = function_to_call(available_functions=available_functions, 
+    success, function_response_message = function_to_call(available_functions=available_functions, 
                                                  function_call_message=function_call_message)  
     
-
     messages = check_get_final_function_response(model=model, 
+                                                 origin_question=origin_question,
                                                  messages=messages, 
-                                                 function_call_message=function_call_message,
+                                                 success=success,                                                 
                                                  function_response_message=function_response_message,
+                                                 depth=depth,
                                                  available_functions=available_functions,
-                                                 is_enhanced_mode=is_enhanced_mode, 
+                                                 is_enhanced_mode=False, 
                                                  delete_some_messages=delete_some_messages)
     
     return messages
 
-
 def check_get_final_function_response(model, 
+                                      origin_question,
                                       messages, 
-                                      function_call_message,
+                                      success,
                                       function_response_message,
+                                      depth=1,
                                       available_functions=None,
                                       is_enhanced_mode=False, 
                                       delete_some_messages=False):
     
-    
-    # 獲取外部函數運行结果内容
-    fun_res_content = function_response_message["content"]
-    
-    # 若function_response中包含错误
-    if "报错" in fun_res_content or "報錯" in fun_res_content:
-        print(fun_res_content)
-        debug_prompt_list = ['你編寫的代碼報錯了，請根據報錯資訊修改代碼並重新執行。']
-                
+    if not success:
+        print(function_response_message["content"])
+        debug_prompt_list = ['你编写的代码报错了，请根据错误信息修改代码并重新运行。']
+
+        print_msgs(messages, "before debug")
         # 此時msg最後一條消息是user message，而不是任何函数调用相關message
-        msg_debug = messages.copy()        
-        # 追加function_call_message
-        # 當前function_call_message中包含编错的代码
-        msg_debug.messages_append(function_call_message)
+        msg_debug = messages.copy()
         msg_debug.messages_append(function_response_message)        
-        
         #auto_gpt
         for debug_prompt in debug_prompt_list:
             msg_debug.messages_append({"role": "user", "content": debug_prompt})
@@ -1043,38 +1107,49 @@ def check_get_final_function_response(model,
             # 打印提示信息
             print("**From MateGen:**")
             msg_debug = get_chat_response(model=model, 
+                                          origin_question=origin_question,
                                           messages=msg_debug, 
+                                          depth=depth+1,
                                           available_functions=available_functions,
                                           is_enhanced_mode=False, 
                                           delete_some_messages=delete_some_messages)
         
-        messages = msg_debug.copy()     
-                 
+        print_msgs(msg_debug, "after debug")
+        return msg_debug
+
     # 若function message不包含報错信息    
     # 需要将function message傳遞给模型
     else:
-        print("外部函数已执行完畢，正在解析運行结果...")
-        messages.messages_append(function_call_message)
+        print("外部函数已执行完毕，正在解析运行结果...")
+        func_content = function_response_message['content']
+        function_response_message['content'] = "tool执行成功，结果为'%s'。" % func_content
         messages.messages_append(function_response_message)
-        messages = get_chat_response(model=model, 
-                                     messages=messages, 
-                                     available_functions=available_functions,
-                                     is_enhanced_mode=is_enhanced_mode, 
-                                     delete_some_messages=delete_some_messages)
+        user_content = "请核实原始问题(%s)是否完全解决，如未完成，请继续做答。你可以继续按需要使用我提供的tools。" % origin_question
         
-    return messages
+        messages.messages_append({"role": "user", "content": user_content})
+        messages = get_chat_response(model=model, 
+                                     origin_question=origin_question,
+                                     messages=messages, 
+                                     depth=depth+1,
+                                     available_functions=available_functions,
+                                     is_enhanced_mode=False, 
+                                     delete_some_messages=delete_some_messages)
+        print("check_get_final_function_response return, depth=",depth)
+        print_msgs(messages, depth)
+        return messages
 
 def is_text_response_valid(model, 
                            messages, 
                            text_answer_message,
                            available_functions=None,
+                           depth=1,
                            is_enhanced_mode=False, 
                            delete_some_messages=False,
                            is_task_decomposition=False):
     
     answer_content = text_answer_message.content
     
-    print("模型回答：\n")
+    print("模型回答,depth=",depth)
     print(answer_content)
     
     messages.messages_append(text_answer_message)
@@ -1101,7 +1176,7 @@ class MateGen():
         if '4o' in model:
             tokens_thr = 1100000
         else:
-            tokens_thr = 7000
+            tokens_thr = 5000
             
         self.tokens_thr = tokens_thr
         
@@ -1121,6 +1196,7 @@ class MateGen():
         print(head_str)
         self.messages.messages_append({"role": "user", "content": question})
         self.messages = get_chat_response(model=self.model, 
+                                          origin_question=question,
                                           messages=self.messages, 
                                           available_functions=self.available_functions,
                                           is_enhanced_mode=self.is_enhanced_mode)
@@ -1130,7 +1206,7 @@ class MateGen():
     
     def upload_messages(self):
         if self.project == None:
-            print("需要先輸入 project 參數（需要是一個 InterProject 物件），才可上傳 messages")
+            print("需要先輸入 project 參數（需要是一个InterProject对象），才可上传 messages")
             return None
         else:
             self.project.append_doc_content(content=self.messages.history_messages)
